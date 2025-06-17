@@ -55,11 +55,18 @@ def visualize_frame(frame: np.ndarray, tracks: Dict[int, Dict], track_to_mmsi: D
         # Get MMSI if available
         mmsi = track_to_mmsi.get(track_id, 'Unknown')
         
+        # Get distance if available
+        distance = track_info.get('distance', None)
+        
         # Draw bounding box
         cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         
-        # Draw label with track ID and MMSI
+        # Create label with track ID, MMSI, and distance
         label = f"Track {track_id} (MMSI: {mmsi})"
+        if distance is not None:
+            label += f" | {distance:.1f}m"
+        
+        # Draw label
         cv2.putText(vis_frame, label, (x1, y1-10), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
@@ -72,12 +79,12 @@ def fusion_pipeline(video_source: str, ais_stream: str, camera_params: str, outp
         video_source: Path to video file
         ais_stream: Path to AIS data CSV
         camera_params: Path to camera parameters file
-        output_dir: Directory to save output frames
+        output_dir: Directory to save output frames and video
     """
     # Initialize components
     camera_params_dict = load_camera_params(camera_params)
     ais_processor = AISProcessor(camera_params_dict)
-    video_processor = VideoProcessor()
+    video_processor = VideoProcessor(camera_params=camera_params_dict)
     fusion_module = FusionModule()
     
     # Load and preprocess AIS data
@@ -88,9 +95,24 @@ def fusion_pipeline(video_source: str, ais_stream: str, camera_params: str, outp
     cap = cv2.VideoCapture(video_source)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_source}")
-        
+    
+    # Get video properties for output
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    
     # Prepare output directory
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Initialize video writer
+    video_output_path = os.path.join(output_dir, 'output_video.mp4')
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    video_writer = cv2.VideoWriter(video_output_path, fourcc, fps, (width, height))
+    if not video_writer.isOpened():
+        raise ValueError(f"Could not create video writer: {video_output_path}")
+    
+    print(f"Processing video...")
+    print(f"Output video will be saved to: {video_output_path}")
     
     # Determine the minimum number of frames to process
     num_ais_frames = len(ais_data.index)
@@ -124,15 +146,23 @@ def fusion_pipeline(video_source: str, ais_stream: str, camera_params: str, outp
         out_path = os.path.join(output_dir, f"frame_{frame_idx:04d}.jpg")
         cv2.imwrite(out_path, vis_frame)
         
-        # Do NOT display results
-        # cv2.imshow('Fusion Results', vis_frame)
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
+        # Write frame to video
+        video_writer.write(vis_frame)
+        
+        # Print progress every 10 frames
+        if frame_idx % 10 == 0:
+            print(f"Processed frame {frame_idx}/{num_ais_frames}")
         
         frame_idx += 1
-        
+    
+    # Release resources
     cap.release()
+    video_writer.release()
     cv2.destroyAllWindows()
+    
+    print(f"\nProcessing complete!")
+    print(f"Detection images saved to: {output_dir}")
+    print(f"Output video saved to: {video_output_path}")
 
 if __name__ == "__main__":
     import argparse

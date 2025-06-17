@@ -3,17 +3,22 @@ import numpy as np
 from ultralytics import YOLO
 from typing import List, Dict, Tuple
 import torch
+from distance_estimator import DistanceEstimator
 
 class VideoProcessor:
-    def __init__(self, model_path: str = "yolov8x.pt"):
+    def __init__(self, model_path: str = "yolov8x.pt", camera_params: Dict = None):
         """Initialize video processor with YOLOv8 model.
         
         Args:
             model_path: Path to YOLOv8 model weights
+            camera_params: Dictionary of camera parameters for distance estimation
         """
         self.model = YOLO(model_path)
         self.tracks = {}  # track_id -> track_info
         self.next_track_id = 0
+        
+        # Initialize distance estimator if camera params are provided
+        self.distance_estimator = DistanceEstimator(camera_params) if camera_params else None
         
     def process_frame(self, frame: np.ndarray, frame_idx: int) -> Tuple[List[Dict], Dict[int, Dict]]:
         """Process a single video frame.
@@ -38,11 +43,21 @@ class VideoProcessor:
                 cls = int(box.cls[0].cpu().numpy())
                 
                 if conf > 0.5:  # Confidence threshold
-                    detections.append({
+                    detection = {
                         'bbox': [x1, y1, x2, y2],
                         'confidence': conf,
                         'class': cls
-                    })
+                    }
+                    
+                    # Add distance estimation if available
+                    if self.distance_estimator:
+                        distance = self.distance_estimator.estimate_distance(
+                            detection['bbox'], 
+                            (frame.shape[1], frame.shape[0])
+                        )
+                        detection['distance'] = distance
+                    
+                    detections.append(detection)
         
         # Update tracks with new detections
         self._update_tracks(detections, frame_idx)
@@ -82,16 +97,23 @@ class VideoProcessor:
                         track_id = list(self.tracks.keys())[i]
                         self.tracks[track_id]['bbox'] = det_boxes[j]
                         self.tracks[track_id]['last_seen'] = frame_idx
+                        # Update distance if available
+                        if 'distance' in detections[j]:
+                            self.tracks[track_id]['distance'] = detections[j]['distance']
                         matched_tracks.add(i)
                         matched_detections.add(j)
             
             # Second pass: create new tracks for unmatched detections
             for j in range(len(detections)):
                 if j not in matched_detections:
-                    self.tracks[self.next_track_id] = {
+                    track_info = {
                         'bbox': det_boxes[j],
                         'last_seen': frame_idx
                     }
+                    # Add distance if available
+                    if 'distance' in detections[j]:
+                        track_info['distance'] = detections[j]['distance']
+                    self.tracks[self.next_track_id] = track_info
                     self.next_track_id += 1
             
             # Remove old tracks
@@ -101,11 +123,15 @@ class VideoProcessor:
                     del self.tracks[track_id]
         else:
             # Initialize tracks with all detections
-            for det_box in det_boxes:
-                self.tracks[self.next_track_id] = {
+            for j, det_box in enumerate(det_boxes):
+                track_info = {
                     'bbox': det_box,
                     'last_seen': frame_idx
                 }
+                # Add distance if available
+                if 'distance' in detections[j]:
+                    track_info['distance'] = detections[j]['distance']
+                self.tracks[self.next_track_id] = track_info
                 self.next_track_id += 1
     
     def _calculate_iou(self, bbox1: np.ndarray, bbox2: np.ndarray) -> float:
