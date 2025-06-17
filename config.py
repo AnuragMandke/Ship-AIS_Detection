@@ -3,7 +3,6 @@ from pathlib import Path
 
 # Base directories
 BASE_DIR = Path(__file__).parent.absolute()
-DATASET_DIR = BASE_DIR / "FVessel" / "01_Video+AIS"  # Updated dataset directory
 MODELS_DIR = BASE_DIR / "models"
 
 # Create models directory if it doesn't exist
@@ -11,7 +10,8 @@ MODELS_DIR.mkdir(exist_ok=True)
 
 class DatasetConfig:
     def __init__(self):
-        self.dataset_dir = DATASET_DIR
+        # Update base path to new location as a Path object
+        self.base_path = Path(r"E:/Projects/FVessel/01_Video+AIS")
         self.video_extensions = ['.mp4']  # Supported video formats
         self.ais_extensions = ['.csv']    # Supported AIS data formats
         self.camera_params_extensions = ['.txt']  # Supported camera parameter formats
@@ -22,57 +22,24 @@ class DatasetConfig:
 
     def get_video_folders(self):
         """Get list of all video folders."""
-        return [d for d in self.dataset_dir.iterdir() if d.is_dir() and d.name.startswith('Video-')]
+        return [d for d in self.base_path.iterdir() if d.is_dir() and d.name.startswith('Video-')]
 
-    def set_video_path(self, video_folder: str):
-        """Set the path for the video file in a specific folder.
-        
-        Args:
-            video_folder: Name of the video folder (e.g., 'Video-01')
-        """
-        folder_path = self.dataset_dir / video_folder
-        if not folder_path.exists():
-            raise ValueError(f"Video folder {video_folder} not found")
-            
-        # Find the video file in the folder
-        for ext in self.video_extensions:
-            video_files = list(folder_path.glob(f"*{ext}"))
-            if video_files:
-                return str(video_files[0])
-        raise ValueError(f"No video file found in {video_folder}")
-
-    def set_ais_path(self, video_folder: str):
-        """Set the path for the AIS data directory in a specific folder.
-        
-        Args:
-            video_folder: Name of the video folder (e.g., 'Video-01')
-        """
-        folder_path = self.dataset_dir / video_folder / "ais"
-        if not folder_path.exists():
-            raise ValueError(f"AIS directory not found in {video_folder}")
-        return str(folder_path)
-
-    def set_camera_params_path(self, video_folder: str):
-        """Set the path for the camera parameters file in a specific folder.
-        
-        Args:
-            video_folder: Name of the video folder (e.g., 'Video-01')
-        """
-        folder_path = self.dataset_dir / video_folder
-        if not folder_path.exists():
-            raise ValueError(f"Video folder {video_folder} not found")
-            
-        # Find the camera parameters file
-        for ext in self.camera_params_extensions:
-            param_files = list(folder_path.glob(f"*{ext}"))
-            if param_files:
-                return str(param_files[0])
-        raise ValueError(f"No camera parameters file found in {video_folder}")
+    def set_video_path(self, video_folder: str) -> str:
+        """Set path to video file."""
+        return str(self.base_path / video_folder / f"{video_folder}.mp4")
+    
+    def set_ais_path(self, video_folder: str) -> str:
+        """Set path to AIS data directory."""
+        return str(self.base_path / video_folder / "AIS")
+    
+    def set_camera_params_path(self, video_folder: str) -> str:
+        """Set path to camera parameters file."""
+        return str(self.base_path / video_folder / "camera_para.txt")
 
     def get_all_paths(self):
         """Get all configured paths."""
         return {
-            "dataset_dir": str(self.dataset_dir),
+            "dataset_dir": str(self.base_path),
             "model_dir": str(self.model_dir),
             "yolo_model_path": str(self.yolo_model_path)
         }
@@ -96,7 +63,7 @@ class DatasetConfig:
                     break
                     
             # Get AIS files
-            ais_dir = folder / "ais"
+            ais_dir = folder / "AIS"
             if ais_dir.exists():
                 videos[folder_name]["ais_files"] = [f.name for f in ais_dir.glob("*.csv")]
                 
@@ -109,12 +76,12 @@ class DatasetConfig:
                     
         return videos
 
-# Create a global instance
+# Create global instance
 dataset_config = DatasetConfig()
 
 # Example usage:
 if __name__ == "__main__":
-    print("Dataset directory:", str(DATASET_DIR))
+    print("Dataset directory:", str(dataset_config.base_path))
     print("\nAvailable videos:")
     videos = dataset_config.list_available_videos()
     for folder, contents in videos.items():

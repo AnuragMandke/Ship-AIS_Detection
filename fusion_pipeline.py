@@ -55,20 +55,48 @@ def visualize_frame(frame: np.ndarray, tracks: Dict[int, Dict], track_to_mmsi: D
         # Get MMSI if available
         mmsi = track_to_mmsi.get(track_id, 'Unknown')
         
-        # Get distance if available
-        distance = track_info.get('distance', None)
+        # Get relative distance if available
+        relative_distance = track_info.get('relative_distance', None)
+        distance_type = track_info.get('distance_type', 'pixel')
+        
+        # Set color based on whether this is the reference ship
+        is_reference = track_info.get('is_reference', False)
+        color = (0, 0, 255) if is_reference else (0, 255, 0)  # Red for reference, green for others
         
         # Draw bounding box
-        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
         
-        # Create label with track ID, MMSI, and distance
+        # Create label with track ID, MMSI, and relative distance
         label = f"Track {track_id} (MMSI: {mmsi})"
-        if distance is not None:
-            label += f" | {distance:.1f}m"
+        if relative_distance is not None:
+            if is_reference:
+                label += " [REF]"
+            else:
+                if distance_type == 'ais':
+                    # Convert meters to kilometers for display
+                    distance_km = relative_distance / 1000
+                    label += f" | {distance_km:.1f}km from ref"
+                else:
+                    label += f" | {relative_distance:.0f}px from ref"
         
         # Draw label
         cv2.putText(vis_frame, label, (x1, y1-10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Draw distance lines between ships
+        if not is_reference and relative_distance is not None:
+            ref_track = next((t for t in tracks.values() if t.get('is_reference', False)), None)
+            if ref_track:
+                ref_bbox = ref_track['bbox']
+                ref_center = (
+                    int((ref_bbox[0] + ref_bbox[2]) / 2),
+                    int((ref_bbox[1] + ref_bbox[3]) / 2)
+                )
+                curr_center = (
+                    int((x1 + x2) / 2),
+                    int((y1 + y2) / 2)
+                )
+                cv2.line(vis_frame, ref_center, curr_center, (255, 255, 0), 1)
     
     return vis_frame
 

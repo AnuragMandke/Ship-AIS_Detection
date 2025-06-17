@@ -29,8 +29,137 @@ class DistanceEstimator:
             [0, 0, 1]
         ])
         
+        # Reference ship tracking
+        self.reference_ship = None
+        self.reference_track_id = None
+    
+    def calculate_haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate the great circle distance between two points on the earth.
+        
+        Args:
+            lat1, lon1: Latitude and longitude of first point in degrees
+            lat2, lon2: Latitude and longitude of second point in degrees
+            
+        Returns:
+            Distance in meters
+        """
+        # Convert decimal degrees to radians
+        lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+        
+        # Haversine formula
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+        c = 2 * np.arcsin(np.sqrt(a))
+        r = 6371000  # Radius of earth in meters
+        
+        return c * r
+    
+    def update_reference_ship(self, tracks: Dict[int, Dict], ais_data: Dict[str, Dict] = None) -> Dict:
+        """Update reference ship based on leftmost position.
+        
+        Args:
+            tracks: Dictionary of track information
+            ais_data: Dictionary mapping MMSI to AIS information (lat, lon)
+            
+        Returns:
+            Updated tracks with reference ship information
+        """
+        if not tracks:
+            return tracks
+        
+        # Find leftmost ship
+        leftmost = min(tracks.items(), key=lambda x: x[1]['bbox'][0])
+        
+        # Update reference if it's a new ship or if reference is lost
+        if self.reference_track_id is None or self.reference_track_id not in tracks:
+            self.reference_track_id = leftmost[0]
+            self.reference_ship = leftmost[1]
+            # Mark as reference ship
+            self.reference_ship['is_reference'] = True
+            print(f"New reference ship: Track {self.reference_track_id}")
+        
+        updated_tracks = self.calculate_relative_distances(tracks, ais_data)
+        print(f"Updated distances for {len(updated_tracks)} tracks")
+        return updated_tracks
+    
+    def calculate_relative_distances(self, tracks: Dict[int, Dict], ais_data: Dict[str, Dict] = None) -> Dict[int, Dict]:
+        """Calculate distances relative to reference ship using AIS data when available.
+        
+        Args:
+            tracks: Dictionary of track information
+            ais_data: Dictionary mapping MMSI to AIS information (lat, lon)
+            
+        Returns:
+            Updated tracks with relative distances
+        """
+        if not self.reference_ship:
+            print("No reference ship available")
+            return tracks
+        
+        # Get reference ship's AIS data if available
+        ref_mmsi = self.reference_ship.get('mmsi')
+        ref_ais = ais_data.get(ref_mmsi) if ais_data and ref_mmsi else None
+        
+        for track_id, track_info in tracks.items():
+            if track_id == self.reference_track_id:
+                track_info['relative_distance'] = 0
+                track_info['is_reference'] = True
+                continue
+            
+            # Get this track's AIS data if available
+            track_mmsi = track_info.get('mmsi')
+            track_ais = ais_data.get(track_mmsi) if ais_data and track_mmsi else None
+            
+            if ref_ais and track_ais:
+                # Calculate real-world distance using AIS data
+                distance = self.calculate_haversine_distance(
+                    ref_ais['lat'], ref_ais['lon'],
+                    track_ais['lat'], track_ais['lon']
+                )
+                track_info['relative_distance'] = distance
+                track_info['distance_type'] = 'ais'
+                print(f"Track {track_id}: {distance/1000:.1f}km from reference (AIS)")
+            else:
+                # Fall back to pixel distance if AIS data not available
+                bbox = track_info['bbox']
+                center = (
+                    (bbox[0] + bbox[2]) / 2,
+                    (bbox[1] + bbox[3]) / 2
+                )
+                ref_bbox = self.reference_ship['bbox']
+                ref_center = (
+                    (ref_bbox[0] + ref_bbox[2]) / 2,
+                    (ref_bbox[1] + ref_bbox[3]) / 2
+                )
+                pixel_distance = np.sqrt(
+                    (center[0] - ref_center[0])**2 +
+                    (center[1] - ref_center[1])**2
+                )
+                track_info['relative_distance'] = pixel_distance
+                track_info['distance_type'] = 'pixel'
+                print(f"Track {track_id}: {pixel_distance:.1f}px from reference (pixel)")
+            
+            track_info['is_reference'] = False
+        
+        return tracks
+    
+    def pixel_to_real_distance(self, pixel_distance: float) -> float:
+        """Convert pixel distance to real-world distance.
+        
+        Args:
+            pixel_distance: Distance in pixels
+            
+        Returns:
+            Distance in meters
+        """
+        # Using similar triangles principle
+        # Assuming average vessel width of 20 meters for scale
+        avg_vessel_width = 20.0  # meters
+        return (avg_vessel_width * self.focal_length) / pixel_distance
+    
     def estimate_distance(self, bbox: List[float], image_size: Tuple[int, int]) -> float:
-        """Estimate distance to vessel using geometric method.
+        """Estimate absolute distance to vessel using geometric method.
         
         Args:
             bbox: Bounding box [x1, y1, x2, y2]
@@ -44,7 +173,6 @@ class DistanceEstimator:
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2
         bbox_width = x2 - x1
-        bbox_height = y2 - y1
         
         # Calculate angle from principal point
         dx = center_x - self.principal_point[0]
@@ -52,7 +180,7 @@ class DistanceEstimator:
         angle = np.arctan2(dy, dx)
         
         # Calculate distance using similar triangles
-        # Assuming average vessel width of 20 meters (can be adjusted)
+        # Assuming average vessel width of 20 meters
         avg_vessel_width = 20.0  # meters
         distance = (avg_vessel_width * self.focal_length) / bbox_width
         

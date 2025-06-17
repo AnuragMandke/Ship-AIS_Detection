@@ -33,8 +33,36 @@ class AISProcessor:
         Returns:
             DataFrame with preprocessed AIS data
         """
+        # Read the CSV file
         df = pd.read_csv(csv_path)
+        
+        # Print column names for debugging
+        print("Available columns in AIS data:", df.columns.tolist())
+        
+        # Map column names to expected names
+        column_mapping = {
+            'lat': 'latitude',
+            'lon': 'longitude',
+            'LAT': 'latitude',
+            'LON': 'longitude',
+            'Latitude': 'latitude',
+            'Longitude': 'longitude'
+        }
+        
+        # Rename columns if they exist
+        for old_name, new_name in column_mapping.items():
+            if old_name in df.columns:
+                df = df.rename(columns={old_name: new_name})
+        
+        # Verify required columns exist
+        required_columns = ['latitude', 'longitude', 'mmsi', 'timestamp']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns in AIS data: {missing_columns}")
+        
+        # Convert timestamp to datetime
         df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
         return df
         
     def interpolate_ais_data(self, df: pd.DataFrame, target_fps: float = 10.0) -> pd.DataFrame:

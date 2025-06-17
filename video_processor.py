@@ -6,12 +6,13 @@ import torch
 from distance_estimator import DistanceEstimator
 
 class VideoProcessor:
-    def __init__(self, model_path: str = "yolov8x.pt", camera_params: Dict = None):
+    def __init__(self, model_path: str = "yolov8x.pt", camera_params: Dict = None, conf_threshold=0.3):
         """Initialize video processor with YOLOv8 model.
         
         Args:
             model_path: Path to YOLOv8 model weights
             camera_params: Dictionary of camera parameters for distance estimation
+            conf_threshold: Confidence threshold for detection
         """
         self.model = YOLO(model_path)
         self.tracks = {}  # track_id -> track_info
@@ -20,12 +21,16 @@ class VideoProcessor:
         # Initialize distance estimator if camera params are provided
         self.distance_estimator = DistanceEstimator(camera_params) if camera_params else None
         
-    def process_frame(self, frame: np.ndarray, frame_idx: int) -> Tuple[List[Dict], Dict[int, Dict]]:
-        """Process a single video frame.
+        self.camera_params = camera_params
+        self.conf_threshold = conf_threshold
+        
+    def process_frame(self, frame: np.ndarray, frame_idx: int, ais_data: Dict[str, Dict] = None) -> Tuple[List[Dict], Dict[int, Dict]]:
+        """Process a single frame for vessel detection and tracking.
         
         Args:
-            frame: Input video frame
-            frame_idx: Current frame index
+            frame: Input frame
+            frame_idx: Frame index
+            ais_data: Dictionary mapping MMSI to AIS information (lat, lon)
             
         Returns:
             Tuple of (detections, tracks)
@@ -33,35 +38,30 @@ class VideoProcessor:
         # Run YOLO detection
         results = self.model(frame)
         
-        # Convert detections to list of dicts
+        # Convert detections to list of dictionaries
         detections = []
         for r in results:
             boxes = r.boxes
             for box in boxes:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 conf = float(box.conf[0].cpu().numpy())
-                cls = int(box.cls[0].cpu().numpy())
-                
-                if conf > 0.5:  # Confidence threshold
-                    detection = {
+                if conf > self.conf_threshold:
+                    detections.append({
                         'bbox': [x1, y1, x2, y2],
                         'confidence': conf,
-                        'class': cls
-                    }
-                    
-                    # Add distance estimation if available
-                    if self.distance_estimator:
-                        distance = self.distance_estimator.estimate_distance(
-                            detection['bbox'], 
-                            (frame.shape[1], frame.shape[0])
-                        )
-                        detection['distance'] = distance
-                    
-                    detections.append(detection)
+                        'frame_idx': frame_idx
+                    })
         
         # Update tracks with new detections
-        self._update_tracks(detections, frame_idx)
+        tracks = self._update_tracks(detections, frame_idx)
         
+        # Calculate relative distances if distance estimator is available
+        if self.distance_estimator is not None:
+            tracks = self.distance_estimator.update_reference_ship(tracks, ais_data)
+        
+        # At the end, ensure tracks is a dict
+        if self.tracks is None:
+            self.tracks = {}
         return detections, self.tracks
     
     def _update_tracks(self, detections: List[Dict], frame_idx: int):
@@ -97,9 +97,6 @@ class VideoProcessor:
                         track_id = list(self.tracks.keys())[i]
                         self.tracks[track_id]['bbox'] = det_boxes[j]
                         self.tracks[track_id]['last_seen'] = frame_idx
-                        # Update distance if available
-                        if 'distance' in detections[j]:
-                            self.tracks[track_id]['distance'] = detections[j]['distance']
                         matched_tracks.add(i)
                         matched_detections.add(j)
             
@@ -110,9 +107,6 @@ class VideoProcessor:
                         'bbox': det_boxes[j],
                         'last_seen': frame_idx
                     }
-                    # Add distance if available
-                    if 'distance' in detections[j]:
-                        track_info['distance'] = detections[j]['distance']
                     self.tracks[self.next_track_id] = track_info
                     self.next_track_id += 1
             
@@ -128,11 +122,12 @@ class VideoProcessor:
                     'bbox': det_box,
                     'last_seen': frame_idx
                 }
-                # Add distance if available
-                if 'distance' in detections[j]:
-                    track_info['distance'] = detections[j]['distance']
                 self.tracks[self.next_track_id] = track_info
                 self.next_track_id += 1
+        
+        # Calculate relative distances if distance estimator is available
+        if self.distance_estimator is not None:
+            self.tracks = self.distance_estimator.update_reference_ship(self.tracks)
     
     def _calculate_iou(self, bbox1: np.ndarray, bbox2: np.ndarray) -> float:
         """Calculate IoU between two bounding boxes."""
